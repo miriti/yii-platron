@@ -26,66 +26,57 @@ class PlatronPayment extends CApplicationComponent
 
         return self::PAYMENT_URL . "?" . $result;
     }
+
+    /**
+     * Generates XML from array
+     */
+    private static function generateXML($arr) {
+        $result = "";
+
+        foreach ($arr as $key => $value) {
+            $result .= '<' . $key . '>' . $value . '</' . $key . '>';
+        }
+
+        return $result;
+    }
     
-    public function checkPayment($oOrder)
+    public function checkPayment($oOrder, $scriptName = null)
     {
-        $params = array(
-            'pg_order_id' => isset($_REQUEST['pg_order_id']) ? $_REQUEST['pg_order_id'] : "",
-            'pg_payment_id' => isset($_REQUEST['pg_payment_id']) ? $_REQUEST['pg_payment_id'] : "",
-            'pg_amount' => isset($_REQUEST['pg_amount']) ? $_REQUEST['pg_amount'] : "",
-            'pg_currency' => isset($_REQUEST['pg_currency']) ? $_REQUEST['pg_currency'] : "",
-            'pg_net_amount' => isset($_REQUEST['pg_net_amount']) ? $_REQUEST['pg_net_amount'] : "",
-            'pg_ps_amount' => isset($_REQUEST['pg_ps_amount']) ? $_REQUEST['pg_ps_amount'] : "",
-            'pg_ps_full_amount' => isset($_REQUEST['pg_ps_full_amount']) ? $_REQUEST['pg_ps_full_amount'] : "",
-            'pg_ps_currency' => isset($_REQUEST['pg_ps_currency']) ? $_REQUEST['pg_ps_currency'] : "",
-            'pg_payment_system' => isset($_REQUEST['pg_payment_system']) ? $_REQUEST['pg_payment_system'] : "",
-            'pg_description' => isset($_REQUEST['pg_description']) ? $_REQUEST['pg_description'] : "",
-            'pg_result' => isset($_REQUEST['pg_result']) ? $_REQUEST['pg_result'] : "",
-            'pg_payment_date' => isset($_REQUEST['pg_payment_date']) ? $_REQUEST['pg_payment_date'] : "",
-            'pg_can_reject' => isset($_REQUEST['pg_can_reject']) ? $_REQUEST['pg_can_reject'] : "",
-            'pg_user_phone' => isset($_REQUEST['pg_user_phone']) ? $_REQUEST['pg_user_phone'] : "",
-            'pg_salt' => isset($_REQUEST['pg_salt']) ? $_REQUEST['pg_salt'] : "",
-            'pg_sig' => isset($_REQUEST['pg_sig']) ? $_REQUEST['pg_sig'] : ""
-        ); 
+        header("Content-Type: text/xml");
+        echo '<?xml version="1.0" encoding="utf-8"?>
+        <response>';
+
+        $params = $_REQUEST;
         
-        if (isset($_REQUEST['pg_description']))
+        if($scriptName === null)
         {
-            $params['pg_description'] = $_REQUEST['pg_description'];
+            $scriptName = $this->extractScriptName($_SERVER['REQUEST_URI']);
         }
         
-        $script = 'result';
-        $params_check = $params;
-        unset($params_check['pg_sig']);
-        ksort($params_check);
-        $sig_result = implode(";", $params_check);
-        
-        $sig_check = md5($script . ";" . $sig_result . ";" . $this->secret_key);
-        
-        if ($sig_check != $params['pg_sig']) { echo "bad sign\n"; exit(); }
-        
-        if ($oOrder && $oOrder->id && $params['pg_result'] == 1) {
-        	$params['pg_ps_amount'] = round($params['pg_ps_amount'], 2);
-            
-            if ($params['pg_ps_amount'] >= $oOrder->amount) 
-            {
+        $sent_sig = $params['pg_sig'];
+        unset($params['pg_sig']);
+    
+        $response_params = array();
 
-                $salt = $this->getSalt();
-                $hash = $this->getSig(array('pg_status' => 'ok', 'pg_salt' => $salt), $script);
+        if ($sent_sig != $this->getSig($params, $scriptName)) 
+        {
+            $response_params['pg_status'] = 'error';
+            $response_params['pg_description'] = 'Bad signature';
+            echo self::generateXML($response_params) . '</response>';
 
-                header("Content-Type: text/xml");
-                echo '<?xml version="1.0" encoding="utf-8"?>
-                <response>
-                <pg_salt>'.$salt.'</pg_salt>
-                <pg_status>ok</pg_status>
-                <pg_sig>'.$hash.'</pg_sig>
-                </response>';
-                Yii::app()->end();
- 
-                return true;
-            }
+            return false;
         }
-        
-        return false;
+    
+        $response_params['pg_status'] = 'ok';
+        $response_params['pg_salt'] = $this->getSalt();
+
+        $response_sig = $this->getSig($response_params, $scriptName);
+
+        $response_params['pg_sig'] = $response_sig;
+
+        echo self::generateXML($response_params) . '</response>';
+
+        return true;
     }
     
     protected function getParams($order_id, $amount, $description, $currency='RUR', $language='ru')
@@ -162,11 +153,18 @@ class PlatronPayment extends CApplicationComponent
     protected function getSig($aParams, $script = false)
     {
         if (!$script)
-            $script = substr(self::PAYMENT_URL, strrpos(self::PAYMENT_URL, "/") + 1);
+            $script = $this->extractScriptName(self::PAYMENT_URL);
         
         ksort($aParams);
         $result = implode(";", $aParams);
-        
-        return md5($script . ";" . $result . ";" . $this->secret_key);
+
+        $string_to_hash = $script . ";" . $result . ";" . $this->secret_key;
+                
+        return md5($string_to_hash);
+    }
+
+    protected function extractScriptName($url)
+    {
+        return substr($url, strrpos($url, "/") + 1);
     }
 }
